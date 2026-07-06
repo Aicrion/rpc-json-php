@@ -290,6 +290,87 @@ Files that do not resolve to an existing class, or whose class lacks
 `#[RpcHandler]`, are silently skipped -- no exception is thrown for
 ordinary, non-handler PHP files living in the same directory.
 
+
+### Caching the discovery scan
+
+Re-scanning a directory on every process boot (e.g. every PHP-FPM
+request) is wasted work once your handler set stabilizes. Pass a
+`$cacheFile` to persist the list of discovered classes on disk:
+
+```php
+$kernel = (new RpcKernelBuilder())
+    ->withDiscoveredHandlers(
+        __DIR__ . '/src/Handler',
+        'App\\Handler',
+        cacheFile: __DIR__ . '/storage/handlers.cache.php',
+    )
+    ->build();
+```
+
+- **First run**: the directory is scanned as usual, and the resulting
+  class list is written to `handlers.cache.php` as a plain PHP array
+  (`return [...]`), so reading it back is just a `require`, no
+  serialization overhead.
+- **Every subsequent build()**: if the cache file already exists, the
+  filesystem walk is skipped entirely -- the registry simply
+  `require`s the cached class list and registers each class lazily,
+  exactly as it would have after a fresh scan.
+- **Invalidating the cache**: delete the file (e.g. as part of your
+  deployment script) whenever handlers are added, removed, or moved,
+  so the next request rebuilds it.
+
+### Resolve-on-demand (zero scanning, ever)
+
+If you would rather avoid scanning a directory even once, use
+`withResolvedHandlers()` with a `NamespaceResolver`. No filesystem walk
+happens at any point -- the handler class for an RPC namespace is
+computed purely from a naming convention (or an explicit map) and
+verified through PHP's ordinary autoloader (`class_exists()`), exactly
+the first time that namespace is actually requested:
+
+```php
+use Aicrion\JsonRpc\Registry\ConventionNamespaceResolver;
+
+// "math"    -> App\Handler\MathHandler
+// "account" -> App\Handler\AccountHandler
+$kernel = (new RpcKernelBuilder())
+    ->withResolvedHandlers(new ConventionNamespaceResolver(baseNamespace: 'App\\Handler'))
+    ->build();
+
+// The very first call to "math.add" triggers a single class_exists()
+// check for App\Handler\MathHandler, then registers and lazily
+// instantiates it. "account.balance" never touches MathHandler at all.
+```
+
+If your class names don't follow a predictable convention, declare an
+explicit map instead:
+
+```php
+use Aicrion\JsonRpc\Registry\MapNamespaceResolver;
+
+$kernel = (new RpcKernelBuilder())
+    ->withResolvedHandlers(new MapNamespaceResolver([
+        'math' => App\Handler\MathHandler::class,
+        'account' => App\Billing\AccountingHandler::class,
+    ]))
+    ->build();
+```
+
+Both resolvers implement the same `NamespaceResolver` interface, so you
+can write your own (e.g. resolving against a database table, a config
+file, or a service container) and pass it the same way. Multiple
+resolvers can be stacked with repeated `withResolvedHandlers()` calls;
+they are tried in order until one produces a valid, existing handler
+class.
+
+| Strategy | Filesystem scan | When resolution happens |
+|---|---|---|
+| `withHandler()` / `withHandlers()` | none | immediately (eager) |
+| `withHandlerClass()` | none | on first method invocation |
+| `withDiscoveredHandlers()` (no cache file) | once per `build()` | at `build()` time, lazily instantiated |
+| `withDiscoveredHandlers()` (with cache file) | once ever, then never again | at `build()` time, lazily instantiated |
+| `withResolvedHandlers()` | never | on first request for that namespace |
+
 ---
 
 ## Automatic method protection
@@ -678,7 +759,8 @@ composer test:coverage
 - `RpcKernelBuilder::withHandler(object)` -- eager registration
 - `RpcKernelBuilder::withHandlers(array)` -- eager registration, multiple
 - `RpcKernelBuilder::withHandlerClass(string, ?HandlerFactory)` -- lazy, single class
-- `RpcKernelBuilder::withDiscoveredHandlers(string $directory, string $namespace, ?HandlerFactory)` -- lazy, whole directory
+- `RpcKernelBuilder::withDiscoveredHandlers(string $directory, string $namespace, ?HandlerFactory, ?string $cacheFile)` -- lazy, whole directory, optionally cached to disk
+- `RpcKernelBuilder::withResolvedHandlers(NamespaceResolver, ?HandlerFactory)` -- lazy, zero scanning, resolved on demand
 - `RpcKernelBuilder::withAuthorizationGate(AuthorizationGate)`
 - `RpcKernelBuilder::withParameterBinder(ParameterBinder)`
 - `RpcKernelBuilder::withMiddleware(Stage)`
@@ -699,18 +781,22 @@ composer test:coverage
 - `CacheKeyBuilder::build(MethodDescriptor, array): string`
 - `RateLimitStore::increment(string, int): int`
 - `HandlerFactory::create(string $handlerClass): object`
+- `NamespaceResolver::resolve(string $rpcNamespace): ?string`
 
 ### Registry (`Aicrion\JsonRpc\Registry`)
 
 - `HandlerRegistry::register(object)` -- eager
 - `HandlerRegistry::registerClass(string, ?HandlerFactory)` -- lazy, single class
-- `HandlerRegistry::discoverPath(string $directory, string $namespace, ?HandlerFactory)` -- lazy, whole directory
+- `HandlerRegistry::discoverPath(string $directory, string $namespace, ?HandlerFactory, ?string $cacheFile)` -- lazy, whole directory, optionally cached to disk
+- `HandlerRegistry::withResolver(NamespaceResolver, ?HandlerFactory)` -- zero scanning, resolved on demand
 - `HandlerRegistry::find(string): ?MethodDescriptor`
 - `LazyHandler::resolve(): object` -- builds and memoizes the instance on first call
 - `LazyHandler::isResolved(): bool`
 - `DefaultHandlerFactory` -- plain `new $class()`
 - `ContainerHandlerFactory` -- resolves via any PSR-11 container
 - `InstanceHandlerFactory` -- wraps an already-built instance
+- `ConventionNamespaceResolver` -- "math" -> "{base}\\MathHandler" naming convention
+- `MapNamespaceResolver` -- explicit namespace => class-name map
 
 ### Built-in implementations
 

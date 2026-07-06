@@ -6,6 +6,7 @@ namespace Aicrion\JsonRpc\Kernel;
 
 use Aicrion\JsonRpc\Contract\AuthorizationGate;
 use Aicrion\JsonRpc\Contract\HandlerFactory;
+use Aicrion\JsonRpc\Contract\NamespaceResolver;
 use Aicrion\JsonRpc\Contract\CacheKeyBuilder;
 use Aicrion\JsonRpc\Contract\CacheStore;
 use Aicrion\JsonRpc\Contract\ParameterBinder;
@@ -27,8 +28,11 @@ final class RpcKernelBuilder
     /** @var list<array{class: string, factory: ?HandlerFactory}> */
     private array $lazyClasses = [];
 
-    /** @var list<array{directory: string, namespace: string, factory: ?HandlerFactory}> */
+    /** @var list<array{directory: string, namespace: string, factory: ?HandlerFactory, cacheFile: ?string}> */
     private array $discoveryPaths = [];
+
+    /** @var list<array{resolver: NamespaceResolver, factory: ?HandlerFactory}> */
+    private array $namespaceResolvers = [];
 
     /** @var list<Stage> */
     private array $middleware = [];
@@ -84,10 +88,34 @@ final class RpcKernelBuilder
      * instantiated during the scan or at build() time -- construction
      * only happens the first time one of its methods is invoked.
      */
-    public function withDiscoveredHandlers(string $directory, string $namespace, ?HandlerFactory $factory = null): self
+    public function withDiscoveredHandlers(
+        string $directory,
+        string $namespace,
+        ?HandlerFactory $factory = null,
+        ?string $cacheFile = null,
+    ): self {
+        $clone = clone $this;
+        $clone->discoveryPaths[] = [
+            'directory' => $directory,
+            'namespace' => $namespace,
+            'factory' => $factory,
+            'cacheFile' => $cacheFile,
+        ];
+
+        return $clone;
+    }
+
+    /**
+     * Enables resolve-on-demand mode: no directory is scanned, ever.
+     * The handler class backing an unknown "namespace.method" is
+     * computed on the fly, the first time it's requested, purely from
+     * $resolver's naming convention (or explicit map) -- resolved
+     * through PHP's ordinary autoloader, exactly like `class_exists()`.
+     */
+    public function withResolvedHandlers(NamespaceResolver $resolver, ?HandlerFactory $factory = null): self
     {
         $clone = clone $this;
-        $clone->discoveryPaths[] = ['directory' => $directory, 'namespace' => $namespace, 'factory' => $factory];
+        $clone->namespaceResolvers[] = ['resolver' => $resolver, 'factory' => $factory];
 
         return $clone;
     }
@@ -153,7 +181,11 @@ final class RpcKernelBuilder
         }
 
         foreach ($this->discoveryPaths as $entry) {
-            $registry->discoverPath($entry['directory'], $entry['namespace'], $entry['factory']);
+            $registry->discoverPath($entry['directory'], $entry['namespace'], $entry['factory'], $entry['cacheFile']);
+        }
+
+        foreach ($this->namespaceResolvers as $entry) {
+            $registry->withResolver($entry['resolver'], $entry['factory']);
         }
 
         return new RpcKernel(

@@ -454,4 +454,93 @@ final class RpcKernelTest extends TestCase
 
         self::assertSame([\Aicrion\JsonRpc\Tests\Fixtures\LazyCounterHandler::class], $recorder->created);
     }
+
+    public function testDiscoverPathWithCacheFileSkipsFilesystemScanOnSubsequentBuilds(): void
+    {
+        \Aicrion\JsonRpc\Tests\Fixtures\Discovered\PingHandler::$constructions = 0;
+
+        $directory = __DIR__ . '/Fixtures/Discovered';
+        $namespace = 'Aicrion\\JsonRpc\\Tests\\Fixtures\\Discovered';
+        $cacheFile = sys_get_temp_dir() . '/aicrion_jsonrpc_discovery_cache_' . bin2hex(random_bytes(4)) . '.php';
+
+        self::assertFalse(is_file($cacheFile));
+
+        $first = (new RpcKernelBuilder())
+            ->withDiscoveredHandlers($directory, $namespace, cacheFile: $cacheFile)
+            ->build();
+
+        self::assertTrue(is_file($cacheFile));
+
+        $response = $first->dispatch(['jsonrpc' => '2.0', 'method' => 'discovered.ping', 'id' => 1]);
+        self::assertSame('pong-from-discovery', $response->result);
+
+        $cachedClasses = require $cacheFile;
+        self::assertContains(\Aicrion\JsonRpc\Tests\Fixtures\Discovered\PingHandler::class, $cachedClasses);
+
+        // A second build() call, backed by the same cache file, must
+        // register the handler again without ever re-scanning the
+        // directory -- it simply requires the cached class list.
+        $second = (new RpcKernelBuilder())
+            ->withDiscoveredHandlers($directory, $namespace, cacheFile: $cacheFile)
+            ->build();
+
+        $response2 = $second->dispatch(['jsonrpc' => '2.0', 'method' => 'discovered.ping', 'id' => 2]);
+        self::assertSame('pong-from-discovery', $response2->result);
+
+        unlink($cacheFile);
+    }
+
+    public function testResolvedHandlersRegisterOnDemandWithoutScanningAnyDirectory(): void
+    {
+        \Aicrion\JsonRpc\Tests\Fixtures\Resolved\ReportHandler::$constructions = 0;
+
+        $resolver = new \Aicrion\JsonRpc\Registry\ConventionNamespaceResolver(
+            baseNamespace: 'Aicrion\\JsonRpc\\Tests\\Fixtures\\Resolved',
+        );
+
+        $kernel = (new RpcKernelBuilder())
+            ->withResolvedHandlers($resolver)
+            ->build();
+
+        self::assertSame(0, \Aicrion\JsonRpc\Tests\Fixtures\Resolved\ReportHandler::$constructions);
+
+        $response = $kernel->dispatch(['jsonrpc' => '2.0', 'method' => 'report.generate', 'id' => 1]);
+
+        self::assertSame('report-generated', $response->result);
+        self::assertSame(1, \Aicrion\JsonRpc\Tests\Fixtures\Resolved\ReportHandler::$constructions);
+    }
+
+    public function testResolvedHandlersReturnMethodNotFoundWhenConventionDoesNotMatch(): void
+    {
+        $resolver = new \Aicrion\JsonRpc\Registry\ConventionNamespaceResolver(
+            baseNamespace: 'Aicrion\\JsonRpc\\Tests\\Fixtures\\Resolved',
+        );
+
+        $kernel = (new RpcKernelBuilder())
+            ->withResolvedHandlers($resolver)
+            ->build();
+
+        $response = $kernel->dispatch(['jsonrpc' => '2.0', 'method' => 'nonexistent.doStuff', 'id' => 1]);
+
+        self::assertNotNull($response->error);
+        self::assertSame(-32601, $response->error->code);
+    }
+
+    public function testMapNamespaceResolverResolvesFromAnExplicitMap(): void
+    {
+        \Aicrion\JsonRpc\Tests\Fixtures\Resolved\ReportHandler::$constructions = 0;
+
+        $resolver = new \Aicrion\JsonRpc\Registry\MapNamespaceResolver([
+            'report' => \Aicrion\JsonRpc\Tests\Fixtures\Resolved\ReportHandler::class,
+        ]);
+
+        $kernel = (new RpcKernelBuilder())
+            ->withResolvedHandlers($resolver)
+            ->build();
+
+        $response = $kernel->dispatch(['jsonrpc' => '2.0', 'method' => 'report.generate', 'id' => 1]);
+
+        self::assertSame('report-generated', $response->result);
+        self::assertSame(1, \Aicrion\JsonRpc\Tests\Fixtures\Resolved\ReportHandler::$constructions);
+    }
 }
