@@ -1,0 +1,9 @@
+title: Aicrion JsonRpc
+description: A modern, attribute-driven JSON-RPC 2.0 server library for PHP 8.2+
+theme: jekyll-theme-cayman
+markdown: kramdown
+kramdown:
+  input: GFM
+  syntax_highlighter: rouge
+plugins:
+  - jekyll-relative-links
