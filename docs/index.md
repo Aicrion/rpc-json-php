@@ -34,9 +34,10 @@ caching / rate limiting -- all without touching the core.
 13. [Caching](#caching)
 14. [Rate limiting](#rate-limiting)
 15. [Error handling](#error-handling)
-16. [Full HTTP example](#full-http-example)
-17. [Testing](#testing)
-18. [API reference](#api-reference)
+16. [Returning custom errors](#returning-custom-errors-from-a-handler)
+17. [Full HTTP example](#full-http-example)
+18. [Testing](#testing)
+19. [API reference](#api-reference)
 
 ---
 
@@ -694,6 +695,65 @@ exposes the original `Throwable` via its public `$cause` property for
 logging purposes, while the client only ever sees a generic
 "execution failed" message -- no internal details leak over the wire.
 
+
+### Returning custom errors from a handler
+
+Throwing a plain PHP exception inside a handler method is always
+caught and wrapped into a generic `-32000` "execution failed" error --
+this protects clients from ever seeing internal stack traces or
+implementation details. When you need to signal an expected,
+business-level failure (insufficient funds, resource not found,
+validation error) with your own code, message, and structured data,
+throw `Exception\RpcErrorException` instead:
+
+```php
+use Aicrion\JsonRpc\Attribute\RpcHandler;
+use Aicrion\JsonRpc\Attribute\RpcMethod;
+use Aicrion\JsonRpc\Exception\RpcErrorException;
+
+#[RpcHandler('wallet')]
+final class WalletHandler
+{
+    #[RpcMethod]
+    public function withdraw(float $amount): array
+    {
+        if ($amount > 100) {
+            throw new RpcErrorException(
+                message: 'Insufficient funds',
+                code: -32020,
+                data: ['available' => 100, 'requested' => $amount],
+            );
+        }
+
+        return ['withdrawn' => $amount];
+    }
+}
+```
+
+This propagates untouched to the client:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "error": {
+    "code": -32020,
+    "message": "Insufficient funds",
+    "data": {"available": 100, "requested": 500}
+  }
+}
+```
+
+| Exception thrown | Client sees |
+|---|---|
+| `RpcErrorException` | your exact code, message, and data |
+| any other `Throwable` | generic `-32000` "execution failed", no internal details leaked |
+
+Reserve custom application error codes below `-32000` (e.g. `-32010`
+and beyond) to avoid colliding with the JSON-RPC 2.0 reserved range
+(`-32768` to `-32000`) and with this library's own built-in codes
+(`-32001` unauthorized, `-32002` rate limited).
+
 ---
 
 ## Full HTTP example
@@ -771,6 +831,13 @@ composer test:coverage
 - `RpcKernel::dispatch(array): RpcResponse`
 - `RpcKernel::dispatchBatch(array): list<RpcResponse>`
 - `RpcKernel::dispatchJson(string): string`
+
+### Exceptions (`Aicrion\JsonRpc\Exception`)
+
+- `JsonRpcException` -- abstract base, carries `rpcCode` and `rpcData`
+- `RpcErrorException` -- throw from a handler to return a custom code/message/data untouched
+- `MethodInvocationException` -- wraps unexpected `Throwable`s as a generic `-32000` error
+- `MethodNotFoundException`, `UnauthorizedMethodException`, `RateLimitExceededException`, `InvalidHandlerDefinitionException`
 
 ### Contracts (`Aicrion\JsonRpc\Contract`)
 

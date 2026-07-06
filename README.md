@@ -176,8 +176,6 @@ $kernel = (new RpcKernelBuilder())
     ->build();
 ```
 
----
-
 ## 📜 License
 
 Created with ❤️ by Aicrion. Licensed under the [MIT License](LICENSE.md). Free to use, modify, and distribute!

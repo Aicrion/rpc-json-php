@@ -543,4 +543,44 @@ final class RpcKernelTest extends TestCase
         self::assertSame('report-generated', $response->result);
         self::assertSame(1, \Aicrion\JsonRpc\Tests\Fixtures\Resolved\ReportHandler::$constructions);
     }
+
+    public function testHandlerCanThrowRpcErrorExceptionWithCustomCodeAndData(): void
+    {
+        $kernel = (new RpcKernelBuilder())
+            ->withHandler(new \Aicrion\JsonRpc\Tests\Fixtures\WalletHandler())
+            ->build();
+
+        $response = $kernel->dispatch(['jsonrpc' => '2.0', 'method' => 'wallet.withdraw', 'params' => ['amount' => 500], 'id' => 1]);
+
+        self::assertNotNull($response->error);
+        self::assertSame(-32020, $response->error->code);
+        self::assertSame('Insufficient funds', $response->error->message);
+        self::assertSame(['available' => 100, 'requested' => 500.0], $response->error->data);
+    }
+
+    public function testHandlerSucceedsWhenBusinessConditionIsMet(): void
+    {
+        $kernel = (new RpcKernelBuilder())
+            ->withHandler(new \Aicrion\JsonRpc\Tests\Fixtures\WalletHandler())
+            ->build();
+
+        $response = $kernel->dispatch(['jsonrpc' => '2.0', 'method' => 'wallet.withdraw', 'params' => ['amount' => 50], 'id' => 1]);
+
+        self::assertNull($response->error);
+        self::assertSame(['withdrawn' => 50.0], $response->result);
+    }
+
+    public function testUnexpectedExceptionsAreStillWrappedAsGenericInternalError(): void
+    {
+        $kernel = (new RpcKernelBuilder())
+            ->withHandler(new \Aicrion\JsonRpc\Tests\Fixtures\WalletHandler())
+            ->build();
+
+        $response = $kernel->dispatch(['jsonrpc' => '2.0', 'method' => 'wallet.brokenMethod', 'id' => 1]);
+
+        self::assertNotNull($response->error);
+        self::assertSame(-32000, $response->error->code);
+        self::assertStringContainsString('Execution of method', $response->error->message);
+        self::assertStringNotContainsString('RuntimeException', $response->error->message);
+    }
 }
