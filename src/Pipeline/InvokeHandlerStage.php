@@ -9,8 +9,9 @@ use Aicrion\JsonRpc\Message\RpcRequest;
 use Throwable;
 
 /**
- * Terminal stage of the pipeline: calls the resolved handler method
- * with the bound arguments and returns its raw return value.
+ * Terminal stage of the pipeline: resolves the handler instance
+ * lazily (constructing it only now, on the first real call that
+ * needs it) and invokes it with the bound arguments.
  */
 final class InvokeHandlerStage implements Stage
 {
@@ -19,7 +20,9 @@ final class InvokeHandlerStage implements Stage
         $descriptor = $context->descriptor;
 
         try {
-            return $descriptor->handlerInstance->{$descriptor->handlerMethod}(...$context->boundArguments);
+            $instance = $descriptor->handler->resolve();
+
+            return $instance->{$descriptor->handlerMethod}(...$context->boundArguments);
         } catch (Throwable $throwable) {
             throw MethodInvocationException::fromThrowable($descriptor->qualifiedName, $throwable);
         }

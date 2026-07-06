@@ -366,4 +366,92 @@ final class RpcKernelTest extends TestCase
 
         self::assertSame(1, $fakeStore->calls);
     }
+
+    public function testWithHandlerClassDoesNotInstantiateUntilInvoked(): void
+    {
+        \Aicrion\JsonRpc\Tests\Fixtures\LazyCounterHandler::$constructions = 0;
+
+        $kernel = (new RpcKernelBuilder())
+            ->withHandlerClass(\Aicrion\JsonRpc\Tests\Fixtures\LazyCounterHandler::class)
+            ->build();
+
+        self::assertSame(0, \Aicrion\JsonRpc\Tests\Fixtures\LazyCounterHandler::$constructions);
+
+        $response = $kernel->dispatch(['jsonrpc' => '2.0', 'method' => 'lazy.ping', 'id' => 1]);
+
+        self::assertSame('pong', $response->result);
+        self::assertSame(1, \Aicrion\JsonRpc\Tests\Fixtures\LazyCounterHandler::$constructions);
+    }
+
+    public function testLazyHandlerIsInstantiatedOnlyOnceAcrossMultipleCalls(): void
+    {
+        \Aicrion\JsonRpc\Tests\Fixtures\LazyCounterHandler::$constructions = 0;
+
+        $kernel = (new RpcKernelBuilder())
+            ->withHandlerClass(\Aicrion\JsonRpc\Tests\Fixtures\LazyCounterHandler::class)
+            ->build();
+
+        $kernel->dispatch(['jsonrpc' => '2.0', 'method' => 'lazy.ping', 'id' => 1]);
+        $kernel->dispatch(['jsonrpc' => '2.0', 'method' => 'lazy.ping', 'id' => 2]);
+        $kernel->dispatch(['jsonrpc' => '2.0', 'method' => 'lazy.ping', 'id' => 3]);
+
+        self::assertSame(1, \Aicrion\JsonRpc\Tests\Fixtures\LazyCounterHandler::$constructions);
+    }
+
+    public function testUnusedLazyHandlerIsNeverInstantiated(): void
+    {
+        \Aicrion\JsonRpc\Tests\Fixtures\LazyCounterHandler::$constructions = 0;
+
+        $kernel = (new RpcKernelBuilder())
+            ->withHandler(new MathHandler())
+            ->withHandlerClass(\Aicrion\JsonRpc\Tests\Fixtures\LazyCounterHandler::class)
+            ->build();
+
+        $kernel->dispatch(['jsonrpc' => '2.0', 'method' => 'math.add', 'params' => [1, 2], 'id' => 1]);
+
+        self::assertSame(0, \Aicrion\JsonRpc\Tests\Fixtures\LazyCounterHandler::$constructions);
+    }
+
+    public function testWithDiscoveredHandlersScansDirectoryAndRegistersHandlersLazily(): void
+    {
+        \Aicrion\JsonRpc\Tests\Fixtures\Discovered\PingHandler::$constructions = 0;
+
+        $directory = __DIR__ . '/Fixtures/Discovered';
+        $namespace = 'Aicrion\\JsonRpc\\Tests\\Fixtures\\Discovered';
+
+        $kernel = (new RpcKernelBuilder())
+            ->withDiscoveredHandlers($directory, $namespace)
+            ->build();
+
+        self::assertSame(0, \Aicrion\JsonRpc\Tests\Fixtures\Discovered\PingHandler::$constructions);
+
+        $response = $kernel->dispatch(['jsonrpc' => '2.0', 'method' => 'discovered.ping', 'id' => 1]);
+
+        self::assertSame('pong-from-discovery', $response->result);
+        self::assertSame(1, \Aicrion\JsonRpc\Tests\Fixtures\Discovered\PingHandler::$constructions);
+    }
+
+    public function testCustomHandlerFactoryIsUsedForLazyClasses(): void
+    {
+        $recorder = new class implements \Aicrion\JsonRpc\Contract\HandlerFactory {
+            public array $created = [];
+
+            public function create(string $handlerClass): object
+            {
+                $this->created[] = $handlerClass;
+
+                return new $handlerClass();
+            }
+        };
+
+        $kernel = (new RpcKernelBuilder())
+            ->withHandlerClass(\Aicrion\JsonRpc\Tests\Fixtures\LazyCounterHandler::class, $recorder)
+            ->build();
+
+        self::assertSame([], $recorder->created);
+
+        $kernel->dispatch(['jsonrpc' => '2.0', 'method' => 'lazy.ping', 'id' => 1]);
+
+        self::assertSame([\Aicrion\JsonRpc\Tests\Fixtures\LazyCounterHandler::class], $recorder->created);
+    }
 }

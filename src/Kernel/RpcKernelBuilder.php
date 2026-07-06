@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Aicrion\JsonRpc\Kernel;
 
 use Aicrion\JsonRpc\Contract\AuthorizationGate;
+use Aicrion\JsonRpc\Contract\HandlerFactory;
 use Aicrion\JsonRpc\Contract\CacheKeyBuilder;
 use Aicrion\JsonRpc\Contract\CacheStore;
 use Aicrion\JsonRpc\Contract\ParameterBinder;
@@ -22,6 +23,12 @@ final class RpcKernelBuilder
 {
     /** @var list<object> */
     private array $handlers = [];
+
+    /** @var list<array{class: string, factory: ?HandlerFactory}> */
+    private array $lazyClasses = [];
+
+    /** @var list<array{directory: string, namespace: string, factory: ?HandlerFactory}> */
+    private array $discoveryPaths = [];
 
     /** @var list<Stage> */
     private array $middleware = [];
@@ -52,6 +59,35 @@ final class RpcKernelBuilder
     {
         $clone = clone $this;
         $clone->handlers = [...$clone->handlers, ...$handlers];
+
+        return $clone;
+    }
+
+    /**
+     * Registers a handler by class name only. Nothing is instantiated
+     * until one of its methods is actually invoked. Pass a custom
+     * HandlerFactory if the handler needs constructor dependencies
+     * (e.g. resolved through a DI container).
+     */
+    public function withHandlerClass(string $handlerClass, ?HandlerFactory $factory = null): self
+    {
+        $clone = clone $this;
+        $clone->lazyClasses[] = ['class' => $handlerClass, 'factory' => $factory];
+
+        return $clone;
+    }
+
+    /**
+     * Recursively scans $directory for classes annotated with
+     * #[RpcHandler] and registers them lazily, using $namespace as
+     * the PSR-4 root namespace matching that directory. No handler is
+     * instantiated during the scan or at build() time -- construction
+     * only happens the first time one of its methods is invoked.
+     */
+    public function withDiscoveredHandlers(string $directory, string $namespace, ?HandlerFactory $factory = null): self
+    {
+        $clone = clone $this;
+        $clone->discoveryPaths[] = ['directory' => $directory, 'namespace' => $namespace, 'factory' => $factory];
 
         return $clone;
     }
@@ -111,6 +147,14 @@ final class RpcKernelBuilder
     public function build(): RpcKernel
     {
         $registry = new HandlerRegistry($this->handlers);
+
+        foreach ($this->lazyClasses as $entry) {
+            $registry->registerClass($entry['class'], $entry['factory']);
+        }
+
+        foreach ($this->discoveryPaths as $entry) {
+            $registry->discoverPath($entry['directory'], $entry['namespace'], $entry['factory']);
+        }
 
         return new RpcKernel(
             $registry,

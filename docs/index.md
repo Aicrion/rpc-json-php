@@ -24,18 +24,19 @@ caching / rate limiting -- all without touching the core.
 3. [Quick start](#quick-start)
 4. [Defining handlers](#defining-handlers)
 5. [Namespaces](#namespaces)
-6. [Automatic method protection](#automatic-method-protection)
-7. [Authorization gates](#authorization-gates)
-8. [Parameter binding](#parameter-binding)
-9. [Batch requests](#batch-requests)
-10. [Custom middleware](#custom-middleware)
-11. [Invocation listeners](#invocation-listeners)
-12. [Caching](#caching)
-13. [Rate limiting](#rate-limiting)
-14. [Error handling](#error-handling)
-15. [Full HTTP example](#full-http-example)
-16. [Testing](#testing)
-17. [API reference](#api-reference)
+6. [Auto-discovery and lazy loading](#auto-discovery-and-lazy-loading)
+7. [Automatic method protection](#automatic-method-protection)
+8. [Authorization gates](#authorization-gates)
+9. [Parameter binding](#parameter-binding)
+10. [Batch requests](#batch-requests)
+11. [Custom middleware](#custom-middleware)
+12. [Invocation listeners](#invocation-listeners)
+13. [Caching](#caching)
+14. [Rate limiting](#rate-limiting)
+15. [Error handling](#error-handling)
+16. [Full HTTP example](#full-http-example)
+17. [Testing](#testing)
+18. [API reference](#api-reference)
 
 ---
 
@@ -186,6 +187,108 @@ exposing `math.add`) throws
 `InvalidHandlerDefinitionException::duplicateMethod()` at build time,
 so collisions are caught immediately instead of silently overwriting
 each other.
+
+
+---
+
+## Auto-discovery and lazy loading
+
+Manually `new`-ing every handler and passing it to `withHandler()`
+does not scale once you have dozens of handler classes -- and it wastes
+memory/CPU instantiating handlers that a given request never calls.
+Aicrion\JsonRpc solves both problems:
+
+- **`withHandlerClass()`** registers a handler by class name only.
+- **`withDiscoveredHandlers()`** scans an entire directory (recursively)
+  for classes carrying `#[RpcHandler]`, following a PSR-4
+  directory-to-namespace mapping -- similar to how Composer's own
+  autoloader resolves class names from file paths.
+
+In both cases, **construction is deferred**: only `ReflectionClass` is
+used to read attributes during scanning/registration. The real `new`
+call happens exactly once, the first time one of the handler's methods
+is actually invoked, and the resulting instance is memoized for the
+rest of the kernel's lifetime.
+
+```php
+use Aicrion\JsonRpc\Kernel\RpcKernelBuilder;
+
+$kernel = (new RpcKernelBuilder())
+    // Scans src/Handler recursively, maps files to the App\Handler namespace.
+    ->withDiscoveredHandlers(__DIR__ . '/src/Handler', 'App\\Handler')
+    ->build();
+
+// MathHandler, AccountHandler, etc. are all registered here, but none
+// of their constructors have run yet.
+
+$kernel->dispatch([
+    'jsonrpc' => '2.0',
+    'method' => 'math.add',
+    'params' => [1, 2],
+    'id' => 1,
+]);
+// Only *now* is `new App\Handler\MathHandler()` actually called.
+// AccountHandler, and every other discovered-but-unused handler,
+// is still never instantiated.
+```
+
+### Injecting dependencies into discovered handlers
+
+By default, discovered/lazy classes are built with a bare
+`new $class()` via `DefaultHandlerFactory`. If a handler needs
+constructor dependencies (a database connection, a logger, a
+repository...), supply a `HandlerFactory` -- most commonly one backed
+by your PSR-11 container:
+
+```php
+use Aicrion\JsonRpc\Registry\ContainerHandlerFactory;
+
+$kernel = (new RpcKernelBuilder())
+    ->withDiscoveredHandlers(__DIR__ . '/src/Handler', 'App\\Handler', new ContainerHandlerFactory($container))
+    ->build();
+```
+
+`withHandlerClass()` accepts the same optional factory argument for a
+single class:
+
+```php
+$kernel = (new RpcKernelBuilder())
+    ->withHandlerClass(App\Handler\ReportHandler::class, new ContainerHandlerFactory($container))
+    ->build();
+```
+
+### Mixing eager and lazy registration
+
+`withHandler()` (eager), `withHandlerClass()` (lazy, single class),
+and `withDiscoveredHandlers()` (lazy, whole directory) can all be
+combined freely on the same builder -- the registry treats them
+uniformly once registered:
+
+```php
+$kernel = (new RpcKernelBuilder())
+    ->withHandler(new MathHandler())                              // eager, already built
+    ->withHandlerClass(AccountHandler::class)                      // lazy, single class
+    ->withDiscoveredHandlers(__DIR__ . '/src/Reports', 'App\\Reports') // lazy, whole directory
+    ->build();
+```
+
+### How directory scanning maps to class names
+
+`discoverPath($directory, $namespace)` walks every `.php` file under
+`$directory` recursively and rebuilds the fully-qualified class name by
+appending the file's relative path (with `/` replaced by `\`, and the
+`.php` extension stripped) to `$namespace` -- exactly the PSR-4
+convention most PHP projects (and Composer's autoloader) already
+follow:
+
+```
+src/Handler/MathHandler.php          -> App\Handler\MathHandler
+src/Handler/Billing/InvoiceHandler.php -> App\Handler\Billing\InvoiceHandler
+```
+
+Files that do not resolve to an existing class, or whose class lacks
+`#[RpcHandler]`, are silently skipped -- no exception is thrown for
+ordinary, non-handler PHP files living in the same directory.
 
 ---
 
@@ -572,8 +675,10 @@ composer test:coverage
 
 ### Kernel (`Aicrion\JsonRpc\Kernel`)
 
-- `RpcKernelBuilder::withHandler(object)`
-- `RpcKernelBuilder::withHandlers(array)`
+- `RpcKernelBuilder::withHandler(object)` -- eager registration
+- `RpcKernelBuilder::withHandlers(array)` -- eager registration, multiple
+- `RpcKernelBuilder::withHandlerClass(string, ?HandlerFactory)` -- lazy, single class
+- `RpcKernelBuilder::withDiscoveredHandlers(string $directory, string $namespace, ?HandlerFactory)` -- lazy, whole directory
 - `RpcKernelBuilder::withAuthorizationGate(AuthorizationGate)`
 - `RpcKernelBuilder::withParameterBinder(ParameterBinder)`
 - `RpcKernelBuilder::withMiddleware(Stage)`
@@ -593,6 +698,19 @@ composer test:coverage
 - `CacheStore::get / has / set / delete / clear`
 - `CacheKeyBuilder::build(MethodDescriptor, array): string`
 - `RateLimitStore::increment(string, int): int`
+- `HandlerFactory::create(string $handlerClass): object`
+
+### Registry (`Aicrion\JsonRpc\Registry`)
+
+- `HandlerRegistry::register(object)` -- eager
+- `HandlerRegistry::registerClass(string, ?HandlerFactory)` -- lazy, single class
+- `HandlerRegistry::discoverPath(string $directory, string $namespace, ?HandlerFactory)` -- lazy, whole directory
+- `HandlerRegistry::find(string): ?MethodDescriptor`
+- `LazyHandler::resolve(): object` -- builds and memoizes the instance on first call
+- `LazyHandler::isResolved(): bool`
+- `DefaultHandlerFactory` -- plain `new $class()`
+- `ContainerHandlerFactory` -- resolves via any PSR-11 container
+- `InstanceHandlerFactory` -- wraps an already-built instance
 
 ### Built-in implementations
 
