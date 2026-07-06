@@ -1,8 +1,20 @@
 {
     "name": "aicrion/json-rpc",
     "description": "A modern, attribute-driven JSON-RPC 2.0 server library with namespace-scoped handler groups and automatic method-level access control.",
+    "keywords": [
+        "rpc", "library", "json-rpc", "json-rpc", "rpc", "webservice", "api", "rpc-json", "rpcjson"
+    ],
     "type": "library",
+    "homepage": "https://github.com/aicrion/rpc-json-php",
     "license": "MIT",
+    "authors": [
+        {
+            "name": "Hadi Akbarzadeh",
+            "email": "elsiomcoder@gmail.com",
+            "homepage": "https://elatel.ir",
+            "role": "Developer"
+        }
+    ],
     "require": {
         "php": ">=8.2",
         "psr/container": "^1.0 || ^2.0"
