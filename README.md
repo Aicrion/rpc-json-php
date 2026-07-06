@@ -175,3 +175,8 @@ $kernel = (new RpcKernelBuilder())
     ->withMiddleware(new RateLimitStage(new LocalRateLimitStore(), maxCallsPerMethod: 100, windowSeconds: 60))
     ->build();
 ```
+---
+
+## 📜 License
+
+Created with ❤️ by Aicrion. Licensed under the [MIT License](LICENSE.md). Free to use, modify, and distribute!
