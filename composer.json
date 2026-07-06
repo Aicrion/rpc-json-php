@@ -1,0 +1,27 @@
+{
+    "name": "aicrion/json-rpc",
+    "description": "A modern, attribute-driven JSON-RPC 2.0 server library with namespace-scoped handler groups and automatic method-level access control.",
+    "type": "library",
+    "license": "MIT",
+    "require": {
+        "php": ">=8.2"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^11.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Aicrion\\JsonRpc\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Aicrion\\JsonRpc\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit",
+        "test:coverage": "phpunit --coverage-html coverage"
+    },
+    "minimum-stability": "stable"
+}
